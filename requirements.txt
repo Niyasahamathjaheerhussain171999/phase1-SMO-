@@ -1,0 +1,29 @@
+# Football Video Analysis - SMO Project Dependencies
+# Core dependencies for Phase 1
+
+# Computer Vision & Object Detection
+ultralytics>=8.0.0
+opencv-python>=4.8.0
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Data Processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Machine Learning & Metrics
+scikit-learn>=1.3.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Video Processing
+yt-dlp>=2023.0.0
+
+# OCR (Optional)
+easyocr>=1.7.0
+
+# Additional utilities
+Pillow>=10.0.0
+
