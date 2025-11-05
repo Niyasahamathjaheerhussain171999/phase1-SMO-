@@ -9,8 +9,8 @@ from sklearn.metrics import precision_score, recall_score, f1_score
 import time
 import json
 
-# YOUR YOUTUBE URL - REPLACE WITH YOUR VIDEO
-youtube_url = "https://youtu.be/awdBdYZSD1Q?si=sGjiXgquKL6kg5OB"  # CHANGE THIS!
+# YOUR YOUTUBE URL - Default video for analysis
+youtube_url = "https://www.youtube.com/watch?v=awdBdYZSD1Q"
 
 # Download function
 def download_youtube_video(url):
