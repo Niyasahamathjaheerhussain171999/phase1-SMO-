@@ -59,6 +59,7 @@ yolov8*.pt
 # Results and outputs
 results/
 outputs/
+output_frames/
 validation_images/
 *.csv
 detailed_*.csv
@@ -67,6 +68,8 @@ detailed_*.csv
 *_report.json
 validation_*.png
 validation_*.jpg
+tracking_output.mp4
+LIVE_PREVIEW.jpg
 
 # Google Colab
 /content/

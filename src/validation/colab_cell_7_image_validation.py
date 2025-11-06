@@ -7,6 +7,9 @@ from datetime import datetime
 import json
 import os
 
+# Initialize uploaded variable (will be set by calling code)
+uploaded = {}
+
 def create_image_validation_system():
     """Create image-based validation system (user preferred)"""
     print("🎯 IMAGE-BASED VALIDATION SYSTEM")
@@ -16,6 +19,8 @@ def create_image_validation_system():
     print()
     
     # Get the video file and results
+    if not uploaded or len(uploaded) == 0:
+        raise ValueError("'uploaded' variable not set. Please set validation_module.uploaded before calling this function.")
     video_file = list(uploaded.keys())[0]  # Your uploaded video
     results_file = 'a_plus_football_results.csv'  # AI results
     
@@ -256,18 +261,27 @@ _Add any observations or issues here:_
     print("✅ Validation checklist saved: validation_images/validation_checklist.md")
     
     # 5. DOWNLOAD ALL VALIDATION FILES
-    print(f"\n📁 DOWNLOADING VALIDATION FILES")
+    print(f"\n📁 VALIDATION FILES CREATED")
     print("-" * 40)
     
-    from google.colab import files
-    
-    # Download all validation images
-    for img in validation_images:
-        files.download(img['image_file'])
-    
-    # Download report and checklist
-    files.download('validation_images/validation_report.json')
-    files.download('validation_images/validation_checklist.md')
+    # Try to download files if in Colab, otherwise just inform user
+    try:
+        from google.colab import files
+        
+        # Download all validation images
+        for img in validation_images:
+            files.download(img['image_file'])
+        
+        # Download report and checklist
+        files.download('validation_images/validation_report.json')
+        files.download('validation_images/validation_checklist.md')
+        print("✅ Files downloaded (Google Colab)")
+    except ImportError:
+        # Local execution - files are already saved
+        print("✅ Validation files saved locally:")
+        print(f"   - {len(validation_images)} validation images in validation_images/")
+        print("   - validation_images/validation_report.json")
+        print("   - validation_images/validation_checklist.md")
     
     print("\n🎉 IMAGE-BASED VALIDATION COMPLETE!")
     print("=" * 60)
@@ -286,5 +300,5 @@ _Add any observations or issues here:_
     cap.release()
     return validation_report
 
-# Run image-based validation
-validation_report = create_image_validation_system()
+# Note: This function should be called from main.py, not at module level
+# The 'uploaded' variable will be set by the calling code before invoking this function

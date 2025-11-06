@@ -26,8 +26,79 @@ import time
 import json
 from pathlib import Path
 
+# Check if we're in a virtual environment, if not automatically use the venv
+def ensure_venv():
+    """Ensure we're using the virtual environment - auto-rerun with venv if needed"""
+    script_dir = Path(__file__).parent
+    venv_python = script_dir / 'venv' / 'bin' / 'python3'
+    script_path = Path(__file__).resolve()
+    
+    # Check if we're already in a venv
+    in_venv = (hasattr(sys, 'real_prefix') or 
+               (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix))
+    
+    # Check if venv exists
+    if venv_python.exists() and not in_venv:
+        # Check if packages are available in current environment
+        try:
+            import cv2  # type: ignore
+            # Packages available, continue normally
+            return
+        except ImportError:
+            # Packages not available, rerun with venv Python
+            print("⚠️  Not running in virtual environment!", file=sys.stderr)
+            print(f"🔄 Automatically switching to venv Python...", file=sys.stderr)
+            print(f"   Using: {venv_python}", file=sys.stderr)
+            sys.stderr.flush()  # Ensure message is printed before execv
+            
+            # Rerun the script with venv Python
+            os.execv(str(venv_python), [str(venv_python)] + sys.argv)
+            # execv replaces the process, so this line should never be reached
+            return
+    
+    # If we're in venv or packages are available, continue
+    if in_venv:
+        return
+    
+    # Not in venv and no venv found - check if packages are installed system-wide
+    try:
+        import cv2  # type: ignore
+        return  # Packages are available
+    except ImportError:
+        # No venv and no packages - give helpful error
+        print("❌ Required packages not found!")
+        if not venv_python.exists():
+            print(f"📦 Virtual environment not found. Please create it:")
+            print(f"   cd {script_dir}")
+            print(f"   python3 -m venv venv")
+            print(f"   source venv/bin/activate")
+            print(f"   pip install -r requirements.txt")
+        else:
+            print(f"📦 Please activate the virtual environment:")
+            print(f"   cd {script_dir}")
+            print(f"   source venv/bin/activate")
+            print(f"   python3 main.py [arguments]")
+        sys.exit(1)
+
+# Run venv check before importing other modules
+ensure_venv()
+
+# Set OpenCV backend to avoid Qt/XCB issues
+# We'll set this after cv2 is imported in the ensure_venv check
+cv2_qt_plugin_path = None
+
+# Set other OpenCV environment variables
+os.environ['OPENCV_VIDEOIO_PRIORITY_MSMF'] = '0'  # Disable Windows Media Foundation
+os.environ['OPENCV_VIDEOIO_PRIORITY_DSHOW'] = '0'  # Disable DirectShow
+
+# Try to set Qt platform if DISPLAY is available
+if os.environ.get('DISPLAY'):
+    # Only set if we have a display
+    if 'QT_QPA_PLATFORM' not in os.environ:
+        os.environ['QT_QPA_PLATFORM'] = 'xcb'
+
 # Default YouTube video URL for analysis
-DEFAULT_YOUTUBE_URL = "https://www.youtube.com/shorts/Ziw3d8sQSq8"
+DEFAULT_YOUTUBE_URL = "https://www.youtube.com/watch?v=awdBdYZSD1Q&t=2s"
 
 # Add src directory to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
@@ -109,7 +180,7 @@ import builtins
 builtins.__import__ = _patched_import
 
 try:
-    import cv2
+    import cv2  # type: ignore
     # Ensure DictValue exists after full import
     if hasattr(cv2, 'dnn'):
         if not hasattr(cv2.dnn, 'DictValue'):
@@ -120,20 +191,30 @@ try:
         # If dnn doesn't exist, use our pre-created one
         if 'cv2.dnn' in sys.modules:
             cv2.dnn = sys.modules['cv2.dnn']
+    
+    # Now set Qt plugin path after cv2 is imported
+    try:
+        cv2_path = os.path.dirname(cv2.__file__)
+        qt_plugin_path = os.path.join(cv2_path, 'qt', 'plugins')
+        if os.path.exists(qt_plugin_path):
+            os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = qt_plugin_path
+            cv2_qt_plugin_path = qt_plugin_path
+    except:
+        pass
 finally:
     # Restore original functions
     builtins.__import__ = _original_import
     importlib.import_module = _original_import_module
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import torch
+import pandas as pd  # type: ignore
+import numpy as np  # type: ignore
+import matplotlib.pyplot as plt  # type: ignore
+import torch  # type: ignore
 
 # Import analysis classes
 try:
     # Try importing from package (if __init__.py exports them)
-    from classes import FixedFootballAnalysis, APlusFootballAnalysis, BalancedFootballAnalysis
+    from classes import FixedFootballAnalysis, APlusFootballAnalysis, BalancedFootballAnalysis  # type: ignore
 except ImportError:
     # Fallback to direct imports
     from classes.colab_cell_5_class import FixedFootballAnalysis  # type: ignore
@@ -158,7 +239,7 @@ try:
     
     try:
         # Try importing from package (if __init__.py exports it)
-        from validation import create_image_validation_system
+        from validation import create_image_validation_system  # type: ignore
     except ImportError:
         # Fallback to direct import
         from validation.colab_cell_7_image_validation import create_image_validation_system  # type: ignore
@@ -184,7 +265,7 @@ def check_gpu():
 def download_youtube_video(url, output_dir='downloads'):
     """Download video from YouTube with flexible format selection"""
     try:
-        import yt_dlp
+        import yt_dlp  # type: ignore
     except ImportError:
         print("❌ yt-dlp not installed. Install with: pip install yt-dlp")
         sys.exit(1)
@@ -521,8 +602,15 @@ def run_validation(video_file, results_file='detailed_football_results.csv'):
         return None
     
     # Create a mock uploaded dict for validation and set it in the validation module
-    import validation.colab_cell_7_image_validation as validation_module
     import shutil
+    try:
+        import validation.colab_cell_7_image_validation as validation_module  # type: ignore
+    except ImportError:
+        # Fallback: try direct import from src
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent / 'src'))
+        from validation.colab_cell_7_image_validation import create_image_validation_system  # type: ignore
+        import validation.colab_cell_7_image_validation as validation_module  # type: ignore
     
     # Use absolute path for video file
     abs_video_file = os.path.abspath(video_file)
@@ -610,6 +698,8 @@ Examples:
                        default='auto', help='Device to use (default: auto-detect)')
     parser.add_argument('--no-show', action='store_true',
                        help='Disable video visualization window')
+    parser.add_argument('--show', action='store_true',
+                       help='Force enable video visualization window (default: auto-detect)')
     
     args = parser.parse_args()
     
@@ -639,19 +729,113 @@ Examples:
     # Initialize analyzer
     print(f"\n📦 Initializing {args.class_type} analysis class...")
     AnalysisClass = get_analysis_class(args.class_type)
-    show_video = not args.no_show
+    
+    # Determine if we should show video
+    # Default: try to show video (can be disabled with --no-show)
+    if args.no_show:
+        show_video = False
+    elif hasattr(args, 'show') and args.show:
+        show_video = True
+    else:
+        # Default: try to show video if we have a display
+        show_video = os.environ.get('DISPLAY') is not None
+    
+    # Check if we can actually display video (headless check)
+    if show_video:
+        # Check if we're on SSH (remote connection)
+        is_ssh = os.environ.get('SSH_CONNECTION') or os.environ.get('SSH_CLIENT')
+        
+        # Check if DISPLAY is set (X11 display)
+        display_available = os.environ.get('DISPLAY') is not None
+        
+        if is_ssh and not display_available:
+            print("⚠️  Detected SSH connection without X11 forwarding.")
+            print("💡 To see the video window, reconnect with X11 forwarding:")
+            print("   ssh -X user@hostname")
+            print("   OR use:")
+            print("   ssh -Y user@hostname  (for trusted X11 forwarding)")
+            print()
+            print("🔄 Running in HEADLESS mode - saving frames to 'output_frames/' instead...")
+            show_video = False
+            can_display = False
+            # Enable frame saving mode
+            os.environ['SAVE_FRAMES'] = 'True'
+        elif not display_available:
+            print("⚠️  No DISPLAY environment variable set.")
+            print("💡 Setting DISPLAY=:0.0 (assuming local X server)")
+            os.environ['DISPLAY'] = ':0.0'
+            display_available = True
+        
+        if display_available:
+            # Try to test if we can actually create a window
+            try:
+                # Use a subprocess to test GUI without crashing the main process
+                import subprocess
+                test_result = subprocess.run(
+                    [sys.executable, '-c', 
+                     'import cv2; import numpy as np; '
+                     'img = np.zeros((10,10,3), dtype=np.uint8); '
+                     'cv2.namedWindow("test", cv2.WINDOW_NORMAL); '
+                     'cv2.imshow("test", img); cv2.waitKey(1); cv2.destroyAllWindows()'],
+                    capture_output=True,
+                    timeout=3,
+                    env=os.environ
+                )
+                can_display = (test_result.returncode == 0)
+                if not can_display and test_result.stderr:
+                    error_msg = test_result.stderr.decode('utf-8', errors='ignore')
+                    if 'xcb' in error_msg.lower() or 'qt' in error_msg.lower():
+                        print("⚠️  Qt/XCB plugin issue detected. Attempting workaround...")
+                        # Try with explicit plugin path
+                        if cv2_qt_plugin_path:
+                            test_env = os.environ.copy()
+                            test_env['QT_QPA_PLATFORM_PLUGIN_PATH'] = cv2_qt_plugin_path
+                            test_env['QT_QPA_PLATFORM'] = 'xcb'
+                            test_result2 = subprocess.run(
+                                [sys.executable, '-c', 
+                                 'import cv2; import numpy as np; '
+                                 'img = np.zeros((10,10,3), dtype=np.uint8); '
+                                 'cv2.namedWindow("test", cv2.WINDOW_NORMAL); '
+                                 'cv2.imshow("test", img); cv2.waitKey(1); cv2.destroyAllWindows()'],
+                                capture_output=True,
+                                timeout=3,
+                                env=test_env
+                            )
+                            if test_result2.returncode == 0:
+                                can_display = True
+                                # Update environment for the actual run
+                                os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = cv2_qt_plugin_path
+                                os.environ['QT_QPA_PLATFORM'] = 'xcb'
+                                print("✅ Qt plugin issue resolved!")
+            except (subprocess.TimeoutExpired, Exception) as e:
+                # Can't display, disable video visualization
+                can_display = False
+            
+            if not can_display:
+                print("⚠️  Cannot display video window (Qt/XCB error).")
+                print("💡 Installing opencv-python-headless might help:")
+                print("   pip uninstall opencv-python")
+                print("   pip install opencv-python-headless opencv-contrib-python")
+                print("💡 Or use --no-show to run without visualization")
+                print("\n🔄 Continuing anyway - window may still work...")
+                # Don't disable - let it try anyway
+                can_display = True  # Force it to try
+    else:
+        can_display = False
     
     # Check if the class accepts show_video parameter
     import inspect
     sig = inspect.signature(AnalysisClass.__init__)
     if 'show_video' in sig.parameters:
-        analyzer = AnalysisClass(show_video=show_video)
+        analyzer = AnalysisClass(show_video=show_video and can_display)
     else:
         analyzer = AnalysisClass()
     
-    if show_video:
+    if show_video and can_display:
         print("📺 Video visualization enabled - A window will open showing the analysis")
         print("   Controls: Press Q to quit visualization, Space to pause/resume")
+    elif show_video and not can_display:
+        print("ℹ️  Video visualization requested but not available (running in headless mode)")
     
     # Run analysis
     passes, accuracy, processing_time = run_analysis(video_file, analyzer, device)
@@ -685,4 +869,3 @@ Examples:
 
 if __name__ == "__main__":
     main()
-

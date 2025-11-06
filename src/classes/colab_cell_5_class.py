@@ -1,4 +1,5 @@
 # CELL 5: Fixed Football Analysis Class
+import os
 import cv2
 import pandas as pd
 import numpy as np
@@ -21,6 +22,14 @@ class FixedFootballAnalysis:
         print("✅ Loaded YOLOv11x model")
         
         self.show_video = show_video
+        # Check if we should save frames instead (for SSH/remote)
+        # ALWAYS save frames if on SSH or if explicitly requested
+        is_ssh = os.environ.get('SSH_CONNECTION') or os.environ.get('SSH_CLIENT')
+        self.save_frames = os.environ.get('SAVE_FRAMES') == 'True' or is_ssh or not show_video
+        if self.save_frames:
+            os.makedirs('output_frames', exist_ok=True)
+            print("📁 Saving ALL visualization frames to: output_frames/")
+            print("   Each frame shows: Player boxes, Ball tracking, Pass detection")
         self.results = {
             'passes': [],
             'players': [],
@@ -35,11 +44,11 @@ class FixedFootballAnalysis:
         self.ball_velocity = (0, 0)  # (vx, vy) pixels/frame
         self.ball_missed_frames = 0
         
-        # Ball detection thresholds
-        self.ball_min_conf = 0.30  # Lowered to catch more ball detections
-        self.ball_min_area = 40    # Minimum area in pixels
-        self.ball_max_area = 6000  # Maximum area in pixels
-        self.ball_max_jump = 250   # Max distance ball can move between frames (increased for fast passes)
+        # Ball detection thresholds - TUNED FOR ACCURACY
+        self.ball_min_conf = 0.35  # Higher confidence = less false positives
+        self.ball_min_area = 50    # Minimum area in pixels (realistic ball size)
+        self.ball_max_area = 5000  # Maximum area in pixels
+        self.ball_max_jump = 200   # Max distance ball can move between frames (realistic ball speed)
         
         # Simple player tracking (just last position)
         self.player_positions = {}  # player_id -> (x, y, team)
@@ -62,12 +71,12 @@ class FixedFootballAnalysis:
         self.pass_start_velocity = None
         self.last_pass_end_frame = 0
         
-        # Pass detection parameters  
-        self.pass_min_velocity = 2.5  # Min pixels/frame to detect pass (lowered to catch slower passes)
-        self.pass_max_frames = 90  # Max frames for a pass to complete (increased for slower passes)
-        self.pass_cooldown = 8  # Frames between passes (reduced to catch rapid passes)
-        self.possession_radius = 80  # Radius for possession (increased)
-        self.short_long_threshold_px = 120  # Distance threshold
+        # Pass detection parameters - TUNED FOR ACCURACY
+        self.pass_min_velocity = 3.0  # Min pixels/frame (clear passes only)
+        self.pass_max_frames = 75  # Max frames for a pass to complete
+        self.pass_cooldown = 10  # Frames between passes (prevent duplicates)
+        self.possession_radius = 70  # Radius for possession (tighter = more accurate)
+        self.short_long_threshold_px = 150  # Distance threshold (realistic pass distances)
     
     def analyze_video(self, video_path):
         """Complete analysis with GPU acceleration"""
@@ -110,6 +119,7 @@ class FixedFootballAnalysis:
         players_tracking = {}
         pass_events = []
         detection_count = 0
+        self.max_players_seen = 0  # Track max players for stats
         
         while True:
             ret, frame = cap.read()
@@ -146,6 +156,9 @@ class FixedFootballAnalysis:
                 # Track players (with team assignment)
                 players_tracking = self.track_players(player_detections, players_tracking, frame_count, frame)
                 
+                # Update max players seen
+                self.max_players_seen = max(self.max_players_seen, len(players_tracking))
+                
                 # Detect passes (using ball tracking)
                 passes = self.detect_passes(players_tracking, frame_count)
                 
@@ -155,14 +168,46 @@ class FixedFootballAnalysis:
                 self.results['passes'].extend(passes)
                 
                 # Visualize if enabled
-                if self.show_video:
+                if self.show_video or self.save_frames:
                     vis_frame = self.visualize_frame(frame, players_tracking, ball_detections, passes, frame_count)
-                    cv2.imshow('Football Pass Detection', vis_frame)
                     
-                    # Press 'q' to quit
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        print("⏹️  Video visualization stopped by user")
-                        break
+                    if self.show_video:
+                        try:
+                            cv2.imshow('Football Pass Detection', vis_frame)
+                            
+                            # Press 'q' to quit
+                            if cv2.waitKey(1) & 0xFF == ord('q'):
+                                print("⏹️  Video visualization stopped by user")
+                                break
+                        except cv2.error as e:
+                            # Display failed, switch to frame saving
+                            print(f"⚠️  Display error: {e}")
+                            print("🔄 Switching to frame saving mode...")
+                            self.show_video = False
+                            self.save_frames = True
+                            os.makedirs('output_frames', exist_ok=True)
+                    
+                    # Save frames if requested (EVERY FRAME for complete tracking view)
+                    if self.save_frames:
+                        frame_path = f'output_frames/frame_{frame_count:06d}.jpg'
+                        cv2.imwrite(frame_path, vis_frame)
+                        
+                        # Real-time progress updates
+                        if frame_count % 50 == 0:
+                            # Show tracking stats
+                            ball_status = "✅" if (self.ball_position and self.ball_confidence >= self.ball_min_conf) else "❌"
+                            players_count = len(players_tracking)
+                            passes_count = len(passes) if passes else 0
+                            
+                            print(f"📊 Frame {frame_count}/{total_frames} ({frame_count/total_frames*100:.1f}%) | "
+                                  f"Ball: {ball_status} | Players: {players_count} | Passes: {passes_count} | "
+                                  f"Saved: {frame_path}")
+                        
+                        # Create live preview every 100 frames
+                        if frame_count % 100 == 0:
+                            preview_path = 'output_frames/LIVE_PREVIEW.jpg'
+                            cv2.imwrite(preview_path, vis_frame)
+                            print(f"🖼️  LIVE PREVIEW updated: {preview_path} (refresh to see latest)")
                 
             except Exception as e:
                 print(f"⚠️ Detection error at frame {frame_count}: {e}")
@@ -180,16 +225,101 @@ class FixedFootballAnalysis:
         if self.show_video:
             cv2.destroyAllWindows()
         
-        print(f"📊 Total detections: {detection_count}")
-        print(f"📊 Total passes detected: {len(pass_events)}")
+        print(f"\n{'='*60}")
+        print(f"📊 ANALYSIS SUMMARY")
+        print(f"{'='*60}")
+        print(f"📹 Total frames processed: {frame_count}")
+        print(f"👥 Total player detections: {detection_count}")
+        print(f"⚽ Total passes detected: {len(pass_events)}")
         
-        # Show ball tracking summary
+        # Calculate tracking statistics
         ball_tracked_frames = sum(1 for h in self.ball_history if h.get('confidence', 0) >= self.ball_min_conf)
-        print(f"⚽ Ball tracking: {ball_tracked_frames} frames with ball detected (conf >= {self.ball_min_conf})")
-        if len(pass_events) > 0:
-            print(f"⚠️  NOTE: All {len(pass_events)} passes were detected using BALL TRACKING (movement fallback is disabled)")
+        ball_tracking_percentage = (ball_tracked_frames / frame_count * 100) if frame_count > 0 else 0
+        
+        # Player tracking stats
+        avg_players_per_frame = detection_count / frame_count if frame_count > 0 else 0
+        max_players = max(len(players_tracking) if hasattr(self, 'max_players_seen') else 0, 
+                         len(players_tracking))
+        
+        print(f"\n🎯 TRACKING QUALITY:")
+        print(f"   ⚽ Ball tracked: {ball_tracked_frames}/{frame_count} frames ({ball_tracking_percentage:.1f}%)")
+        print(f"   👥 Average players per frame: {avg_players_per_frame:.1f}")
+        print(f"   👥 Max players tracked simultaneously: {max_players}")
+        
+        # Pass breakdown
+        if pass_events:
+            short_passes = [p for p in pass_events if p.get('type') == 'short']
+            long_passes = [p for p in pass_events if p.get('type') == 'long']
+            successful_passes = [p for p in pass_events if p.get('success', False)]
+            
+            print(f"\n⚽ PASS BREAKDOWN:")
+            print(f"   📏 Short passes: {len(short_passes)}")
+            print(f"   📏 Long passes: {len(long_passes)}")
+            print(f"   ✅ Successful: {len(successful_passes)}/{len(pass_events)} ({len(successful_passes)/len(pass_events)*100:.1f}%)")
+            
+            if short_passes:
+                avg_short_dist = sum(p['distance'] for p in short_passes) / len(short_passes)
+                print(f"   📏 Avg short pass distance: {avg_short_dist:.0f}px")
+            if long_passes:
+                avg_long_dist = sum(p['distance'] for p in long_passes) / len(long_passes)
+                print(f"   📏 Avg long pass distance: {avg_long_dist:.0f}px")
         else:
-            print(f"⚠️  NOTE: No passes detected. Check if ball is being tracked properly.")
+            print(f"\n⚠️  NO PASSES DETECTED")
+            print(f"   This could mean:")
+            print(f"   - Ball not being tracked properly (check ball detection)")
+            print(f"   - Players not close enough to ball")
+            print(f"   - Pass velocity too low (min: {self.pass_min_velocity}px/frame)")
+        
+        # Auto-create video from saved frames (ALWAYS if frames are saved)
+        if self.save_frames:
+            print(f"\n🎬 Creating tracking video from frames...")
+            import subprocess
+            try:
+                # Check if we have frames
+                import glob
+                frames = sorted(glob.glob('output_frames/frame_*.jpg'))
+                if len(frames) > 0:
+                    print(f"   Found {len(frames)} frames")
+                    video_output = 'tracking_output.mp4'
+                    cmd = [
+                        'ffmpeg', '-y', '-framerate', str(fps),
+                        '-pattern_type', 'glob', '-i', 'output_frames/frame_*.jpg',
+                        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+                        '-pix_fmt', 'yuv420p', video_output
+                    ]
+                    result = subprocess.run(cmd, capture_output=True, text=True)
+                    if result.returncode == 0:
+                        print(f"✅ Created tracking video: {video_output}")
+                        print(f"   📺 Watch it to verify:")
+                        print(f"      - Player tracking (red/blue boxes)")
+                        print(f"      - Ball tracking (green box + purple arrow)")
+                        print(f"      - Pass detection (yellow lines)")
+                        print(f"      - Pass labels (SHORT/LONG)")
+                    else:
+                        print(f"⚠️  ffmpeg failed: {result.stderr}")
+                        print(f"   Install with: sudo apt-get install ffmpeg")
+                        print(f"   You can still view frames in: output_frames/")
+                else:
+                    print(f"⚠️  No frames found in output_frames/")
+            except Exception as e:
+                print(f"⚠️  Could not create video: {e}")
+                print(f"   View individual frames in: output_frames/")
+        
+        # Validation warnings
+        print(f"\n{'='*60}")
+        if ball_tracking_percentage < 30:
+            print(f"⚠️  WARNING: Ball tracking is low ({ball_tracking_percentage:.1f}%)")
+            print(f"   - Check if ball is visible in video")
+            print(f"   - Try lowering ball_min_conf (current: {self.ball_min_conf})")
+        if avg_players_per_frame < 5:
+            print(f"⚠️  WARNING: Low player detection ({avg_players_per_frame:.1f} per frame)")
+            print(f"   - Check if players are visible")
+            print(f"   - YOLO may need adjustment")
+        if len(pass_events) == 0 and ball_tracking_percentage > 50:
+            print(f"⚠️  WARNING: Ball tracked but no passes detected")
+            print(f"   - Pass velocity threshold may be too high (current: {self.pass_min_velocity}px/frame)")
+            print(f"   - Possession radius may be too tight (current: {self.possession_radius}px)")
+        print(f"{'='*60}")
         
         # Calculate accuracy
         accuracy = self.calculate_accuracy(pass_events)
@@ -1035,6 +1165,3 @@ class FixedFootballAnalysis:
             'short_count': 0,
             'long_count': 0
         }
-    
-# Initialize analyzer
-analyzer = FixedFootballAnalysis()
